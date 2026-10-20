@@ -38,7 +38,7 @@
     <section class="space-y-2">
       <label class="flex items-center gap-2"><input type="checkbox" id="tFlood" checked> <span class="w-3 h-3 rounded bg-blue-500"></span> Flood susceptibility (MGB)</label>
       <label class="flex items-center gap-2"><input type="checkbox" id="tSlide" checked> <span class="w-3 h-3 rounded bg-orange-500"></span> Rain-induced landslide (MGB)</label>
-      <label class="flex items-center gap-2"><input type="checkbox" id="tApprox"> <span class="w-3 h-3 rounded border border-dashed border-slate-400"></span> Schematic fallback zones (approx.)</label>
+      <label class="flex items-center gap-2"><input type="checkbox" id="tApprox"> <span class="w-3 h-3 rounded border border-dashed border-slate-400"></span> MGB vector zones (live, by class)</label>
       <label class="flex items-center gap-2"><input type="checkbox" id="tBld" checked> 3D buildings (zoom in)</label>
       <label class="flex items-center gap-2"><input type="checkbox" id="tTer" checked> 3D terrain</label>
       <div>Vertical exaggeration <span id="exv">1.5</span>×<input id="ex" type="range" min="1" max="3" step="0.1" value="1.5" class="w-full"></div>
@@ -57,6 +57,7 @@
     <section>
       <h2 class="font-bold mb-1">Hazard at pin</h2>
       <p class="text-xs opacity-70 mb-2">Click the map to query MGB susceptibility at that point.</p>
+      <div id="vecs" class="text-[11px] opacity-70 mb-2"></div>
       <div id="pinres" class="rounded-lg bg-slate-100 dark:bg-slate-700 p-3 text-xs">No point selected.</div>
     </section>
 
@@ -83,13 +84,6 @@ const FAC=[
 ];
 const TYPES={gov:['Government','landmark','#2563eb'],health:['Hospital','hospital','#dc2626'],evac:['Evacuation','tent','#16a34a'],market:['Market','shopping-basket','#d97706']};
 
-// Schematic fallback zones (NOT survey-grade); official MGB layers are authoritative
-const approx={type:'FeatureCollection',features:[
- {type:'Feature',properties:{k:'flood',l:'High (schematic) – lowland/river corridor'},geometry:{type:'Polygon',coordinates:[[[121.128,14.092],[121.145,14.096],[121.160,14.091],[121.170,14.084],[121.158,14.080],[121.142,14.083],[121.130,14.086],[121.128,14.092]]]}},
- {type:'Feature',properties:{k:'flood',l:'Moderate (schematic) – low-lying barangays'},geometry:{type:'Polygon',coordinates:[[[121.118,14.078],[121.135,14.082],[121.140,14.072],[121.128,14.066],[121.116,14.070],[121.118,14.078]]]}},
- {type:'Feature',properties:{k:'slide',l:'Moderate/High (schematic) – upland slopes'},geometry:{type:'Polygon',coordinates:[[[121.178,14.100],[121.198,14.104],[121.205,14.088],[121.190,14.078],[121.176,14.086],[121.178,14.100]]]}},
- {type:'Feature',properties:{k:'slide',l:'Moderate (schematic) – slopes'},geometry:{type:'Polygon',coordinates:[[[121.100,14.108],[121.118,14.112],[121.122,14.100],[121.106,14.096],[121.100,14.108]]]}}
-]};
 
 const sat={type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19,attribution:'Esri, Maxar, Earthstar Geographics'};
 const street={type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],tileSize:256,maxzoom:19,attribution:'© OpenStreetMap, © CARTO'};
@@ -103,15 +97,15 @@ const map=new maplibregl.Map({
    omt:{type:'vector',url:'https://tiles.openfreemap.org/planet',attribution:'OpenFreeMap © OpenMapTiles, OSM'},
    flood:{type:'raster',tiles:[exportUrl(SVC.flood)],tileSize:256,attribution:'Hazard: MGB via Philippine Geoportal/UlaP'},
    slide:{type:'raster',tiles:[exportUrl(SVC.slide)],tileSize:256},
-   approx:{type:'geojson',data:approx}
+   vec:{type:'geojson',data:{type:'FeatureCollection',features:[]}}
   },
   layers:[
    {id:'bm-sat',type:'raster',source:'sat'},
    {id:'bm-street',type:'raster',source:'street',layout:{visibility:'none'}},
    {id:'flood',type:'raster',source:'flood',paint:{'raster-opacity':0.6}},
    {id:'slide',type:'raster',source:'slide',paint:{'raster-opacity':0.6}},
-   {id:'ap-fill',type:'fill',source:'approx',layout:{visibility:'none'},paint:{'fill-color':['match',['get','k'],'flood','#3b82f6','#f97316'],'fill-opacity':0.4}},
-   {id:'ap-line',type:'line',source:'approx',layout:{visibility:'none'},paint:{'line-color':['match',['get','k'],'flood','#1d4ed8','#c2410c'],'line-width':2,'line-dasharray':[2,2]}},
+   {id:'ap-fill',type:'fill',source:'vec',layout:{visibility:'none'},paint:{'fill-color':['get','_c'],'fill-opacity':0.45}},
+   {id:'ap-line',type:'line',source:'vec',layout:{visibility:'none'},paint:{'line-color':['get','_c'],'line-width':1}},
    {id:'bld',type:'fill-extrusion',source:'omt','source-layer':'building',minzoom:14,
     paint:{'fill-extrusion-color':'#d8dee9','fill-extrusion-height':['coalesce',['get','render_height'],6],'fill-extrusion-base':['coalesce',['get','render_min_height'],0],'fill-extrusion-opacity':0.85}}
   ]},
@@ -155,12 +149,32 @@ Object.entries(TYPES).forEach(([k,[l,ic,col]])=>{
 });
 
 // Official MGB point query
+function jsonp(url){return new Promise((res,rej)=>{const cb='cb'+Math.random().toString(36).slice(2);const el=document.createElement('script');
+ const done=()=>{clearTimeout(t);delete window[cb];el.remove();};const t=setTimeout(()=>{done();rej(new Error('timeout'));},20000);
+ window[cb]=d=>{done();res(d);};el.onerror=()=>{done();rej(new Error('load'));};el.src=url+'&callback='+cb;document.head.appendChild(el);});}
+async function arc(url){try{const r=await fetch(url);return await r.json();}catch(e){return jsonp(url);}}
 async function q(svc,[x,y]){
- const u=`${svc}/0/query?geometry=${x},${y}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json`;
- const r=await fetch(u);const j=await r.json();
+ const j=await arc(`${svc}/0/query?geometry=${x},${y}&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json`);
  if(j.error)throw new Error(j.error.message);
  return j.features&&j.features[0]?j.features[0].attributes:null;
 }
+const area=r=>r.reduce((a,p,i)=>{const n=r[(i+1)%r.length];return a+(n[0]-p[0])*(n[1]+p[1]);},0);
+function toGeo(j,k){const out=[];(j.features||[]).forEach(f=>{const rings=(f.geometry&&f.geometry.rings)||[];const polys=[];
+ rings.forEach(r=>{if(area(r)>0)polys.push([r]);else if(polys.length)polys[polys.length-1].push(r);});
+ if(!polys.length)return;const lab=label(f.attributes);
+ out.push({type:'Feature',properties:{k,l:lab,_c:shade(k,lab)},geometry:{type:'MultiPolygon',coordinates:polys}});});return out;}
+function shade(k,l){const F={very:'#1e3a8a',high:'#2563eb',mod:'#60a5fa',low:'#bfdbfe'},L={very:'#7f1d1d',high:'#dc2626',mod:'#f97316',low:'#fde047'};
+ const P=k==='flood'?F:L,t=String(l).toLowerCase();
+ return /very/.test(t)?P.very:/high|\bh\b|^3$|debris|accum/.test(t)?P.high:/mod|\bm\b|^2$/.test(t)?P.mod:P.low;}
+async function loadVec(){
+ const env='121.04,14.00,121.25,14.17';let ok=0;const feats=[];
+ for(const k of ['flood','slide']){try{
+  const j=await arc(`${SVC[k]}/0/query?where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true&maxAllowableOffset=0.0003&resultRecordCount=2000&f=json`);
+  if(j.error)throw new Error(j.error.message);feats.push(...toGeo(j,k));ok++;}catch(e){console.warn('vector load failed',k,e);}}
+ map.getSource('vec').setData({type:'FeatureCollection',features:feats});
+ $('vecs').textContent=ok?`${feats.length} MGB polygons loaded in the Tanauan area.`:'Vector polygons could not be loaded (service unreachable).';
+}
+map.on('load',loadVec);
 function label(a){
  if(!a)return 'None mapped (outside susceptible zones)';
  const keys=Object.keys(a).filter(k=>/susc|haz|class|level|rating|^f?hazard|^lh|^fh|^gridcode|^descript/i.test(k)&&a[k]!=null&&a[k]!=='');
@@ -189,14 +203,14 @@ map.on('click',async e=>{
  const fail=rows.some(r=>r.h.flood===null||r.h.slide===null);
  $('stats').innerHTML=`<div class="flex gap-2"><div class="flex-1 rounded-lg bg-blue-500/15 p-2"><div class="text-lg font-bold">${fl}/${FAC.length}</div>in flood-susceptible zones</div><div class="flex-1 rounded-lg bg-orange-500/15 p-2"><div class="text-lg font-bold">${ls}/${FAC.length}</div>in landslide-susceptible zones</div></div>`+
  rows.map(r=>`<div class="flex justify-between gap-2 border-b border-slate-200 dark:border-slate-700 py-1"><span>${r.f.n}</span><span class="text-right opacity-80">${r.h.flood??'?'} / ${r.h.slide??'?'}</span></div>`).join('')+
- (fail?'<div class="text-amber-600">Some queries failed (service offline or CORS). Fallback zones remain available.</div>':'');
+ (fail?'<div class="text-amber-600">Some MGB queries failed (service offline or blocked). Try again later.</div>':'');
 })();
 
 // Legend
 $('legend').innerHTML=`<div class="font-bold mb-1">Legend</div>
 <div class="flex items-center gap-2"><span class="w-3 h-3 rounded bg-blue-500"></span>Flood susceptibility (low→very high)</div>
 <div class="flex items-center gap-2"><span class="w-3 h-3 rounded bg-orange-500"></span>Landslide susceptibility (low→high)</div>
-<div class="flex items-center gap-2"><span class="w-3 h-3 rounded border border-dashed"></span>Schematic zone (approx.)</div>`+
+<div class="flex items-center gap-2"><span class="w-3 h-3 rounded border border-dashed"></span>Vector zones colored by class</div>`+
 Object.values(TYPES).map(([l,,c])=>`<div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full" style="background:${c}"></span>${l}</div>`).join('');
 
 // Theme
