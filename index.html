@@ -4,14 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Tanauan City Hazard Map</title>
-
-<!-- Leaflet CSS + JS (CDN) -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<!-- Tailwind (Play CDN: fine for prototypes; for production, build Tailwind via CLI) -->
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-
 <style>
   html, body { height: 100%; margin: 0; font-family: 'Public Sans', system-ui, sans-serif; }
   #map { height: 100%; width: 100%; }
@@ -19,305 +15,335 @@
   .haz-popup h3 { margin: 0 0 4px; font-weight: 700; font-size: 14px; }
   .haz-popup p  { margin: 2px 0; font-size: 12.5px; line-height: 1.4; }
   .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; font-weight:600; color:#fff; }
-  /* Custom switch */
   .switch input { position:absolute; opacity:0; }
   .switch .track { width:38px; height:22px; border-radius:999px; background:#cbd5e1; transition:background .15s; position:relative; flex:none; }
   .switch .track::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform .15s; }
   .switch input:checked + .track.flood { background:#2563eb; }
   .switch input:checked + .track.slide { background:#ea580c; }
+  .switch input:checked + .track.brgy  { background:#475569; }
   .switch input:checked + .track::after { transform:translateX(16px); }
   .switch input:focus-visible + .track { outline:2px solid #0f172a; outline-offset:2px; }
-  @media (prefers-reduced-motion: reduce) { .switch .track, .switch .track::after { transition:none; } }
+  .spin { width:18px; height:18px; border:3px solid #cbd5e1; border-top-color:#0f172a; border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .switch .track, .switch .track::after, .spin { transition:none; animation-duration:3s; } }
 </style>
 </head>
 
 <body class="bg-slate-100 text-slate-800">
 <div class="flex flex-col md:flex-row h-full">
 
-  <!-- ============ SIDEBAR ============ -->
   <aside class="md:w-80 w-full md:h-full max-h-[45%] md:max-h-none overflow-y-auto bg-white border-b md:border-b-0 md:border-r border-slate-200 z-[1000] shadow-lg">
     <div class="p-5 border-b border-slate-200">
       <h1 class="text-xl font-bold leading-tight">Tanauan City Hazard Map</h1>
       <p class="text-sm text-slate-500 mt-1">Batangas, Philippines. Flood and landslide susceptibility.</p>
     </div>
 
-    <!-- Search / locate -->
     <section class="p-5 border-b border-slate-200">
       <label for="brgy" class="block text-sm font-semibold mb-2">Go to barangay</label>
       <select id="brgy" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800">
-        <option value="">Select a barangay…</option>
+        <option value="">Loading barangays…</option>
       </select>
       <input id="brgySearch" type="search" placeholder="Or type to filter (e.g. Darasa)"
              class="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-800" />
       <p id="searchMsg" class="text-xs text-slate-500 mt-1 min-h-[1rem]"></p>
     </section>
 
-    <!-- Layer toggles -->
     <section class="p-5 border-b border-slate-200">
       <h2 class="text-sm font-semibold mb-3">Hazard layers</h2>
       <label class="switch relative flex items-center gap-3 py-2 cursor-pointer">
-        <input type="checkbox" id="toggleFlood" checked />
-        <span class="track flood"></span>
+        <input type="checkbox" id="toggleFlood" checked /><span class="track flood"></span>
         <span class="text-sm">Flood-prone areas</span>
       </label>
       <label class="switch relative flex items-center gap-3 py-2 cursor-pointer">
-        <input type="checkbox" id="toggleSlide" checked />
-        <span class="track slide"></span>
+        <input type="checkbox" id="toggleSlide" checked /><span class="track slide"></span>
         <span class="text-sm">Landslide-prone areas</span>
       </label>
-
+      <label class="switch relative flex items-center gap-3 py-2 cursor-pointer">
+        <input type="checkbox" id="toggleBrgy" checked /><span class="track brgy"></span>
+        <span class="text-sm">Barangay boundaries</span>
+      </label>
       <label for="opacity" class="block text-sm font-semibold mt-4 mb-1">Layer opacity</label>
       <input id="opacity" type="range" min="10" max="90" value="45" class="w-full accent-slate-800" />
     </section>
 
+    <!-- Data status: shows whether each file loaded, and whether it is official or SAMPLE -->
+    <section class="p-5 border-b border-slate-200">
+      <h2 class="text-sm font-semibold mb-2">Data status</h2>
+      <ul id="status" class="space-y-2 text-xs"></ul>
+    </section>
+
     <section class="p-5 text-xs text-slate-500 leading-relaxed">
-      <p><strong class="text-slate-700">Sample data only.</strong> The zones shown are illustrative and are not official hazard boundaries. For planning or evacuation decisions, use data from Project NOAH, MGB, or the Tanauan CDRRMO.</p>
+      <p class="mb-2"><a href="3d.html" class="font-semibold text-slate-800 underline">Open 3D view</a></p>
+      <p>Hazard maps are susceptibility maps from fixed scenarios. They are <strong class="text-slate-700">not live or real-time</strong>. Barangay boundaries are indicative. For evacuation or planning decisions, confirm with the Tanauan CDRRMO, MGB, or Project NOAH.</p>
     </section>
   </aside>
 
-  <!-- ============ MAP ============ -->
   <main class="flex-1 relative min-h-0">
     <div id="map" aria-label="Hazard map of Tanauan City"></div>
+    <div id="banner" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-[1100] max-w-[90%] rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-xs px-3 py-2 shadow"></div>
+    <div id="loading" class="absolute inset-0 z-[1050] bg-white/70 flex items-center justify-center gap-3 text-sm font-medium">
+      <div class="spin"></div><span>Loading geographic data…</span>
+    </div>
   </main>
 </div>
 
 <script>
 /* =====================================================================
-   1. MAP INITIALIZATION
-   ===================================================================== */
-const TANAUAN_CENTER = [14.0833, 121.1500];   // [lat, lng]  (Leaflet uses lat first)
-const DEFAULT_ZOOM = 13;
-
-const map = L.map('map', { zoomControl: true }).setView(TANAUAN_CENTER, DEFAULT_ZOOM);
-
-// Standard OpenStreetMap tiles
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-}).addTo(map);
-
-/* =====================================================================
-   2. HAZARD DATA (MOCK / SAMPLE)
-   ---------------------------------------------------------------------
-   HOW TO PLUG IN REAL DATA
-   - Official hazard maps (Project NOAH, MGB, PHIVOLCS) come as shapefiles.
-     Convert them to GeoJSON in WGS84 (EPSG:4326), e.g. with QGIS
-     (Export > Save Features As > GeoJSON, CRS EPSG:4326) or
-     `ogr2ogr -f GeoJSON -t_srs EPSG:4326 out.geojson in.shp`.
-   - IMPORTANT: GeoJSON coordinates are [longitude, latitude].
-     (Leaflet's own L.latLng / setView use [latitude, longitude].)
-   - Then either:
-       a) paste the FeatureCollection into FLOOD_DATA / LANDSLIDE_DATA below, or
-       b) load it from a file:
-            fetch('data/flood.geojson').then(r => r.json()).then(d => floodLayer.addData(d));
-          (serve the page via a local web server, e.g. `python -m http.server`)
-   - Each feature should have properties { name, level, action } where
-     level is "High" or "Moderate". If your dataset uses other property
-     names or codes (e.g. NOAH's "Var" = 1/2/3, MGB's "LSSUSC"), map them
-     in normalizeLevel() below.
+   0. CONFIGURATION  (edit this block, not the logic below)
    ===================================================================== */
 
-// ---- Sample FLOOD zones (lake shore + river corridor + low-lying poblacion)
-const FLOOD_DATA = {
-  type: 'FeatureCollection',
-  features: [
-    { type: 'Feature',
-      properties: { name: 'Taal Lake shoreline (sample)', level: 'High',
-                    action: 'Monitor water levels and prepare for evacuation during heavy rain or lake surge.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.108,14.060],[121.128,14.052],[121.150,14.058],[121.152,14.070],
-        [121.135,14.076],[121.115,14.074],[121.108,14.060]
-      ]] } },
-    { type: 'Feature',
-      properties: { name: 'Lakeside low-lying belt (sample)', level: 'Moderate',
-                    action: 'Stay alert to advisories. Keep an emergency bag ready and know your evacuation center.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.100,14.074],[121.115,14.080],[121.135,14.083],[121.152,14.078],
-        [121.150,14.092],[121.128,14.094],[121.104,14.088],[121.100,14.074]
-      ]] } },
-    { type: 'Feature',
-      properties: { name: 'River corridor (sample)', level: 'High',
-                    action: 'Avoid river banks during storms. Move valuables to higher floors and monitor water levels.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.178,14.118],[121.184,14.116],[121.170,14.098],[121.160,14.084],
-        [121.152,14.072],[121.146,14.076],[121.156,14.092],[121.168,14.106],[121.178,14.118]
-      ]] } },
-    { type: 'Feature',
-      properties: { name: 'Poblacion low-lying area (sample)', level: 'Moderate',
-                    action: 'Check drainage and clear canals. Prepare for possible street flooding.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.138,14.090],[121.158,14.090],[121.162,14.102],[121.148,14.108],[121.136,14.100],[121.138,14.090]
-      ]] } }
-  ]
+// --- Base map tiles. OSM's public tile server is for light use and REQUIRES a
+// Referer header and attribution (https://operations.osmfoundation.org/policies/tiles/).
+// Browsers send no Referer on file:// pages, which is what caused your HTTP 403.
+// Serve this page over http(s) (see setup steps). For heavy traffic, switch to a
+// provider whose terms cover your use (and put its key in `url`).
+const TILE = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19
 };
 
-// ---- Sample LANDSLIDE zones (elevated / sloping terrain to the north-east)
-const LANDSLIDE_DATA = {
-  type: 'FeatureCollection',
-  features: [
-    { type: 'Feature',
-      properties: { name: 'Upland slope (sample)', level: 'High',
-                    action: 'Watch for cracks, tilting trees, or muddy streams. Prepare to evacuate during prolonged rain.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.185,14.120],[121.205,14.126],[121.214,14.110],[121.204,14.096],[121.188,14.100],[121.185,14.120]
-      ]] } },
-    { type: 'Feature',
-      properties: { name: 'Foothill transition (sample)', level: 'Moderate',
-                    action: 'Avoid building on steep cuts. Monitor slopes after heavy rain.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.168,14.122],[121.186,14.134],[121.206,14.140],[121.216,14.126],
-        [121.205,14.126],[121.185,14.120],[121.176,14.112],[121.168,14.122]
-      ]] } },
-    { type: 'Feature',
-      properties: { name: 'Southern ridge (sample)', level: 'Moderate',
-                    action: 'Report new slope cracks to your barangay. Keep drainage paths clear.' },
-      geometry: { type: 'Polygon', coordinates: [[
-        [121.176,14.062],[121.194,14.066],[121.198,14.052],[121.184,14.044],[121.174,14.052],[121.176,14.062]
-      ]] } }
-  ]
+// --- Datasets. Fill source/date/license from the metadata of the files you download.
+const DATASETS = {
+  barangays: {
+    file: 'data/barangays.geojson',
+    nameField: 'ADM4_EN',          // barangay name property (verify with ogrinfo)
+    codeField: 'ADM4_PCODE',       // PSGC code property (optional)
+    source: 'OCHA/HDX Philippines Subnational Administrative Boundaries (PSA, NAMRIA)',
+    date: '2023-11-06 release', license: 'CC BY-IGO',
+    note: 'Indicative boundaries, not official.'
+  },
+  flood: {
+    file: 'data/flood.geojson',
+    // Property names tried in order to find the susceptibility class. Check your file.
+    levelFields: ['level', 'Var', 'GRIDCODE', 'FloodSusc', 'HAZ', 'Hazard'],
+    source: 'EDIT ME: e.g. UP NOAH flood hazard map', date: 'EDIT ME', license: 'EDIT ME (NOAH publishes under ODbL)'
+  },
+  landslide: {
+    file: 'data/landslide.geojson',
+    levelFields: ['level', 'LSSUSC', 'Var', 'GRIDCODE', 'LandSusc', 'HAZ'],
+    source: 'EDIT ME: e.g. MGB / UP NOAH landslide susceptibility', date: 'EDIT ME', license: 'EDIT ME'
+  }
 };
 
-/* =====================================================================
-   3. STYLING + POPUPS
-   ===================================================================== */
+// --- Maps raw class values (lowercased) to a level. Adjust to match your files' legends.
+const LEVEL_MAP = {
+  '3': 'High', 'high': 'High', 'h': 'High', 'very high': 'High',
+  '2': 'Moderate', 'moderate': 'Moderate', 'medium': 'Moderate', 'm': 'Moderate',
+  '1': 'Low', 'low': 'Low', 'l': 'Low'
+};
+
+const ACTIONS = {
+  flood: {
+    High: 'Monitor water levels and prepare for evacuation during heavy rain.',
+    Moderate: 'Stay alert to advisories. Keep an emergency bag ready.',
+    Low: 'Follow local advisories during heavy rain.'
+  },
+  slide: {
+    High: 'Watch for slope cracks and muddy streams. Prepare to evacuate in prolonged rain.',
+    Moderate: 'Avoid steep cuts. Monitor slopes after heavy rain.',
+    Low: 'Follow local advisories during heavy rain.'
+  }
+};
+
 const COLORS = {
-  flood: { High: '#1d4ed8', Moderate: '#60a5fa' },     // dark blue / light blue
-  slide: { High: '#dc2626', Moderate: '#fb923c' }      // red / orange
+  flood: { High: '#1d4ed8', Moderate: '#60a5fa', Low: '#bfdbfe', Unclassified: '#94a3b8' },
+  slide: { High: '#dc2626', Moderate: '#fb923c', Low: '#fde68a', Unclassified: '#94a3b8' }
 };
-let fillOpacity = 0.45;
 
-// Normalize real-world attribute values into "High" | "Moderate".
-// EDIT THIS when you load official data with different property names/codes.
-function normalizeLevel(props) {
-  const v = String(props.level ?? props.Var ?? props.LSSUSC ?? '').toLowerCase();
-  if (v === 'high' || v === '3' || v.startsWith('h')) return 'High';
-  return 'Moderate';
+// --- SAMPLE fallback, used ONLY when data/flood.geojson or data/landslide.geojson
+// cannot be loaded. These shapes are hand-drawn and are NOT real hazard zones.
+const SAMPLE = {
+  flood: fc([['High', [[121.108,14.060],[121.128,14.052],[121.150,14.058],[121.152,14.070],[121.135,14.076],[121.108,14.060]]],
+             ['Moderate', [[121.138,14.090],[121.158,14.090],[121.162,14.102],[121.148,14.108],[121.138,14.090]]]]),
+  landslide: fc([['High', [[121.185,14.120],[121.205,14.126],[121.214,14.110],[121.204,14.096],[121.185,14.120]]],
+                 ['Moderate', [[121.176,14.062],[121.194,14.066],[121.198,14.052],[121.184,14.044],[121.176,14.062]]]])
+};
+function fc(items) {   // GeoJSON order is [lng, lat]
+  return { type: 'FeatureCollection', features: items.map(([level, ring]) => ({
+    type: 'Feature', properties: { level, name: 'Sample zone' }, geometry: { type: 'Polygon', coordinates: [ring] } })) };
 }
 
-function makeLayer(data, kind, label) {
+/* =====================================================================
+   1. MAP
+   ===================================================================== */
+const map = L.map('map', { renderer: L.canvas({ padding: 0.5 }) }).setView([14.0833, 121.1500], 13);
+L.tileLayer(TILE.url, { maxZoom: TILE.maxZoom, attribution: TILE.attribution }).addTo(map);
+map.createPane('brgyPane').style.zIndex = 350;      // boundaries sit under hazards
+map.getPane('brgyPane').style.pointerEvents = 'none'; // so hazard popups stay clickable
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let fillOpacity = 0.45;
+
+if (location.protocol === 'file:') {
+  $('banner').textContent = 'Opened from file://. Map tiles and data files will be blocked. Run a local web server (see README steps).';
+  $('banner').classList.remove('hidden');
+}
+
+/* =====================================================================
+   2. LOADING + VALIDATION
+   Never throws: every dataset returns {ok, data|error} so one bad file
+   cannot break the rest of the page.
+   ===================================================================== */
+function walk(coords, fn) { Array.isArray(coords[0]) ? coords.forEach(c => walk(c, fn)) : fn(coords); }
+
+function validate(data) {
+  if (!data || data.type !== 'FeatureCollection' || !Array.isArray(data.features) || !data.features.length)
+    throw new Error('Not a non-empty GeoJSON FeatureCollection.');
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const f of data.features) {
+    const g = f.geometry;
+    if (!g || !['Polygon', 'MultiPolygon'].includes(g.type)) throw new Error('Only Polygon/MultiPolygon features are supported.');
+    walk(g.coordinates, ([x, y]) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); });
+  }
+  if (Math.abs(minX) > 180 || Math.abs(maxY) > 90) throw new Error('Coordinates look projected, not WGS84 (EPSG:4326). Reproject with ogr2ogr -t_srs EPSG:4326.');
+  if (minX < 30 && maxY > 100) throw new Error('Coordinates look like [lat, lng]. GeoJSON must be [lng, lat].');
+  // Must overlap greater Tanauan area (loose box)
+  if (maxX < 121.0 || minX > 121.4 || maxY < 13.95 || minY > 14.25) throw new Error('Data does not overlap Tanauan City. Clip it or check the CRS.');
+  return data;
+}
+
+async function loadJSON(key) {
+  try {
+    const res = await fetch(DATASETS[key].file, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${DATASETS[key].file}`);
+    return { ok: true, data: validate(await res.json()) };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+function setStatus(label, state, text) {
+  const color = { official: 'bg-emerald-500', sample: 'bg-amber-500', missing: 'bg-red-500' }[state];
+  const li = document.createElement('li');
+  li.className = 'flex gap-2';
+  li.innerHTML = `<span class="mt-1 w-2 h-2 rounded-full flex-none ${color}"></span><span><strong>${esc(label)}:</strong> ${esc(text)}</span>`;
+  $('status').appendChild(li);
+}
+
+/* =====================================================================
+   3. HAZARD LAYERS
+   ===================================================================== */
+function levelOf(props, ds) {
+  for (const k of ds.levelFields) {
+    if (props[k] !== undefined && props[k] !== null) return LEVEL_MAP[String(props[k]).trim().toLowerCase()] || 'Unclassified';
+  }
+  return 'Unclassified';
+}
+
+function makeHazardLayer(data, kind, title, ds, isSample) {
   return L.geoJSON(data, {
-    style: f => {
-      const c = COLORS[kind][normalizeLevel(f.properties)];
-      return { color: c, weight: 1.5, fillColor: c, fillOpacity };
-    },
+    style: f => { const c = COLORS[kind][levelOf(f.properties, ds)]; return { color: c, weight: 1, fillColor: c, fillOpacity }; },
     onEachFeature: (f, layer) => {
-      const lvl = normalizeLevel(f.properties);
-      const c = COLORS[kind][lvl];
-      layer.bindPopup(`
-        <div class="haz-popup">
-          <h3>${label}</h3>
-          <p><span class="badge" style="background:${c}">${lvl} Risk</span></p>
-          <p><strong>Hazard Level:</strong> ${lvl} Risk</p>
-          <p><strong>Zone:</strong> ${f.properties.name ?? 'Unnamed zone'}</p>
-          <p><strong>Recommended Action:</strong> ${f.properties.action ?? 'Follow local advisories.'}</p>
-          <p style="color:#64748b">Sample data, not official.</p>
-        </div>`);
-      layer.on('mouseover', () => layer.setStyle({ weight: 3 }));
-      layer.on('mouseout',  () => layer.setStyle({ weight: 1.5 }));
+      const lvl = levelOf(f.properties, ds), c = COLORS[kind][lvl];
+      const action = ACTIONS[kind][lvl] || 'Follow local advisories.';
+      layer.bindPopup(`<div class="haz-popup">
+        <h3>${title}</h3>
+        ${isSample ? '<p style="color:#b45309"><strong>SAMPLE DATA. Not a real hazard zone.</strong></p>' : ''}
+        <p><span class="badge" style="background:${c}">${lvl === 'Unclassified' ? 'Unclassified' : lvl + ' Susceptibility'}</span></p>
+        <p><strong>Hazard Level:</strong> ${lvl}</p>
+        <p><strong>Recommended Action:</strong> ${action}</p>
+        <p style="color:#64748b">${isSample ? 'Illustrative only' : `Source: ${esc(ds.source)}<br>Date: ${esc(ds.date)}<br>License: ${esc(ds.license)}`}</p></div>`);
+      layer.on('mouseover', () => layer.setStyle({ weight: 2.5 }));
+      layer.on('mouseout',  () => layer.setStyle({ weight: 1 }));
     }
   });
 }
 
-const floodLayer = makeLayer(FLOOD_DATA, 'flood', 'Flood-Prone Area').addTo(map);
-const slideLayer = makeLayer(LANDSLIDE_DATA, 'slide', 'Landslide-Prone Area').addTo(map);
-
 /* =====================================================================
-   4. LAYER CONTROLS
+   4. BARANGAYS: boundaries, dropdown, search, highlight
    ===================================================================== */
-function bindToggle(id, layer) {
-  document.getElementById(id).addEventListener('change', e => {
-    e.target.checked ? layer.addTo(map) : map.removeLayer(layer);
-  });
+let brgyLayer = null, brgyFeatures = [], selected = null;
+const select = $('brgy'), search = $('brgySearch'), msg = $('searchMsg');
+const BASE = { color: '#475569', weight: 1, fillOpacity: 0, dashArray: '3 3' };
+const HILITE = { color: '#0f172a', weight: 3, fillColor: '#fde047', fillOpacity: 0.25, dashArray: null };
+
+function initBarangays(data) {
+  const ds = DATASETS.barangays;
+  brgyLayer = L.geoJSON(data, { pane: 'brgyPane', interactive: false, style: () => BASE });
+  const byFeature = new Map();
+  brgyLayer.eachLayer(l => byFeature.set(l.feature, l));
+  brgyFeatures = data.features.map(f => ({ name: f.properties[ds.nameField], code: f.properties[ds.codeField], layer: byFeature.get(f) }))
+    .filter(b => b.name).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  brgyLayer.addTo(map);
+  map.fitBounds(brgyLayer.getBounds());      // centers on the real city extent
+  renderOptions();
 }
-bindToggle('toggleFlood', floodLayer);
-bindToggle('toggleSlide', slideLayer);
-
-document.getElementById('opacity').addEventListener('input', e => {
-  fillOpacity = e.target.value / 100;
-  [floodLayer, slideLayer].forEach(l => l.setStyle({ fillOpacity }));
-});
-
-/* =====================================================================
-   5. LEGEND (floating, bottom-right)
-   ===================================================================== */
-const legend = L.control({ position: 'bottomright' });
-legend.onAdd = () => {
-  const d = L.DomUtil.create('div');
-  d.className = 'bg-white/95 rounded-xl shadow-lg p-3 text-xs text-slate-700';
-  const row = (c, t) => `<div class="flex items-center gap-2 py-0.5">
-      <span style="background:${c};opacity:.75" class="inline-block w-4 h-4 rounded-sm border border-black/10"></span>${t}</div>`;
-  d.innerHTML = `
-    <div class="font-semibold mb-1">Legend</div>
-    ${row(COLORS.flood.High, 'Flood prone: High')}
-    ${row(COLORS.flood.Moderate, 'Flood prone: Moderate')}
-    ${row(COLORS.slide.High, 'Landslide prone: High')}
-    ${row(COLORS.slide.Moderate, 'Landslide prone: Moderate')}`;
-  L.DomEvent.disableClickPropagation(d);
-  return d;
-};
-legend.addTo(map);
-
-/* =====================================================================
-   6. BARANGAY SEARCH / LOCATE
-   ---------------------------------------------------------------------
-   Coordinates below are APPROXIMATE centroids for navigation only.
-   Replace with exact centroids from the official barangay boundary
-   dataset (e.g. PSA / NAMRIA / PhilGIS) when available.
-   Format: [name, lat, lng, zoom]
-   ===================================================================== */
-const BARANGAYS = [
-  ['Barangay 1 (Poblacion)', 14.0858, 121.1497, 17],
-  ['Barangay 2 (Poblacion)', 14.0866, 121.1510, 17],
-  ['Barangay 3 (Poblacion)', 14.0850, 121.1520, 17],
-  ['Barangay 4 (Poblacion)', 14.0842, 121.1488, 17],
-  ['Barangay 5 (Poblacion)', 14.0874, 121.1478, 17],
-  ['Barangay 6 (Poblacion)', 14.0832, 121.1505, 17],
-  ['Barangay 7 (Poblacion)', 14.0880, 121.1530, 17],
-  ['Altura Bata',     14.0990, 121.1330, 15],
-  ['Ambulong',        14.0600, 121.1250, 15],
-  ['Bagbag',          14.1050, 121.1700, 15],
-  ['Boot',            14.0770, 121.1230, 15],
-  ['Darasa',          14.1010, 121.1620, 15],
-  ['Hidalgo',         14.0905, 121.1400, 15],
-  ['Janopol Oriental',14.1120, 121.1450, 15],
-  ['Malaking Pulo',   14.0640, 121.1350, 15],
-  ['Sambat',          14.0700, 121.1480, 15],
-  ['Santor',          14.0950, 121.1550, 15],
-  ['Wawa',            14.0620, 121.1170, 15]
-];
-
-const select = document.getElementById('brgy');
-const search = document.getElementById('brgySearch');
-const msg = document.getElementById('searchMsg');
 
 function renderOptions(filter = '') {
   const f = filter.trim().toLowerCase();
   select.innerHTML = '<option value="">Select a barangay…</option>';
-  BARANGAYS.forEach(([name], i) => {
-    if (!f || name.toLowerCase().includes(f)) {
-      select.insertAdjacentHTML('beforeend', `<option value="${i}">${name}</option>`);
-    }
-  });
-  msg.textContent = f && select.options.length === 1 ? 'No barangay matches that search.' : '';
-}
-renderOptions();
-
-let marker = null;
-function flyToBarangay(i) {
-  const [name, lat, lng, zoom] = BARANGAYS[i];
-  map.flyTo([lat, lng], zoom, { duration: 1.2 });   // smooth pan + zoom
-  if (marker) map.removeLayer(marker);
-  marker = L.marker([lat, lng]).addTo(map).bindPopup(`<strong>${name}</strong>`).openPopup();
+  brgyFeatures.forEach((b, i) => { if (!f || b.name.toLowerCase().includes(f)) select.insertAdjacentHTML('beforeend', `<option value="${i}">${esc(b.name)}</option>`); });
+  msg.textContent = !brgyFeatures.length ? 'Barangay data not loaded. See Data status.' : (f && select.options.length === 1 ? 'No barangay matches that search.' : '');
 }
 
-select.addEventListener('change', () => { if (select.value !== '') flyToBarangay(+select.value); });
+function goTo(i) {
+  const b = brgyFeatures[i]; if (!b) return;
+  if (selected) selected.layer.setStyle(BASE);
+  selected = b; b.layer.setStyle(HILITE); b.layer.bringToFront();
+  const bounds = b.layer.getBounds();
+  map.flyToBounds(bounds, { maxZoom: 16, duration: 1.2 });
+  L.popup().setLatLng(bounds.getCenter()).setContent(
+    `<div class="haz-popup"><h3>${esc(b.name)}</h3>${b.code ? `<p>PSGC code: ${esc(b.code)}</p>` : ''}
+     <p>Tanauan City, Batangas</p><p style="color:#64748b">Boundary: ${esc(DATASETS.barangays.source)} (${esc(DATASETS.barangays.date)}). ${esc(DATASETS.barangays.note)}</p></div>`).openOn(map);
+}
+select.addEventListener('change', () => { if (select.value !== '') goTo(+select.value); });
 search.addEventListener('input', () => renderOptions(search.value));
-search.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && select.options.length > 1) {
-    select.selectedIndex = 1;
-    flyToBarangay(+select.value);
+search.addEventListener('keydown', e => { if (e.key === 'Enter' && select.options.length > 1) { select.selectedIndex = 1; goTo(+select.value); } });
+
+/* =====================================================================
+   5. LEGEND + TOGGLES
+   ===================================================================== */
+function addLegend(floodSample, slideSample) {
+  const legend = L.control({ position: 'bottomright' });
+  legend.onAdd = () => {
+    const d = L.DomUtil.create('div', 'bg-white/95 rounded-xl shadow-lg p-3 text-xs text-slate-700');
+    const row = (c, t) => `<div class="flex items-center gap-2 py-0.5"><span style="background:${c};opacity:.75" class="inline-block w-4 h-4 rounded-sm border border-black/10"></span>${t}</div>`;
+    const tag = s => s ? ' (SAMPLE)' : '';
+    d.innerHTML = `<div class="font-semibold mb-1">Legend</div>
+      ${['High', 'Moderate', 'Low'].map(l => row(COLORS.flood[l], `Flood ${l.toLowerCase()}${tag(floodSample)}`)).join('')}
+      ${['High', 'Moderate', 'Low'].map(l => row(COLORS.slide[l], `Landslide ${l.toLowerCase()}${tag(slideSample)}`)).join('')}`;
+    L.DomEvent.disableClickPropagation(d);
+    return d;
+  };
+  legend.addTo(map);
+}
+
+function bindToggle(id, getLayer) {
+  $(id).addEventListener('change', e => { const l = getLayer(); if (l) e.target.checked ? l.addTo(map) : map.removeLayer(l); });
+}
+
+/* =====================================================================
+   6. STARTUP
+   ===================================================================== */
+(async function init() {
+  const [b, f, s] = await Promise.all([loadJSON('barangays'), loadJSON('flood'), loadJSON('landslide')]);
+
+  if (b.ok) { initBarangays(b.data); setStatus('Barangays', 'official', `${b.data.features.length} boundaries loaded. ${DATASETS.barangays.source}, ${DATASETS.barangays.date}.`); }
+  else { renderOptions(); setStatus('Barangays', 'missing', b.error); }
+
+  const hazards = {};
+  for (const [key, res, kind, title] of [['flood', f, 'flood', 'Flood-Prone Area'], ['landslide', s, 'slide', 'Landslide-Prone Area']]) {
+    const ds = DATASETS[key];
+    const sample = !res.ok;
+    hazards[key] = { sample, layer: makeHazardLayer(sample ? SAMPLE[key] : res.data, kind, title, sample ? { levelFields: ['level'] } : ds, sample).addTo(map) };
+    sample ? setStatus(title, 'sample', `${res.error}. Showing illustrative SAMPLE shapes, not real hazards.`)
+           : setStatus(title, 'official', `${res.data.features.length} zones. ${ds.source}, ${ds.date}.`);
   }
-});
+  if (hazards.flood.sample || hazards.landslide.sample) {
+    $('banner').textContent = 'Some hazard data is missing. Sample shapes are shown and are NOT real hazard zones.';
+    $('banner').classList.remove('hidden');
+  }
+  addLegend(hazards.flood.sample, hazards.landslide.sample);
+
+  bindToggle('toggleFlood', () => hazards.flood.layer);
+  bindToggle('toggleSlide', () => hazards.landslide.layer);
+  bindToggle('toggleBrgy', () => brgyLayer);
+  $('opacity').addEventListener('input', e => {
+    fillOpacity = e.target.value / 100;
+    Object.values(hazards).forEach(h => h.layer.setStyle({ fillOpacity }));
+  });
+  $('loading').remove();
+})();
 </script>
 </body>
 </html>
