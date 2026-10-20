@@ -11,11 +11,8 @@
 <script src="https://unpkg.com/lucide@0.453.0/dist/umd/lucide.min.js"></script>
 <style>
  html,body{height:100%;margin:0}
- .pin{width:34px;height:34px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 2px 8px #0008;cursor:pointer}
- .pin>i,.pin>svg{transform:rotate(45deg);width:16px;height:16px;color:#fff}
  .maplibregl-popup-content{border-radius:12px;padding:12px 14px;font:13px system-ui;max-width:260px}
  .dark .maplibregl-popup-content{background:#1e293b;color:#e2e8f0}
- .dark .maplibregl-popup-tip{border-top-color:#1e293b!important;border-bottom-color:#1e293b!important}
 </style>
 </head>
 <body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-100">
@@ -26,7 +23,6 @@
       <i data-lucide="siren" class="w-5 h-5 text-red-500"></i>
       <div><div class="font-bold text-sm leading-tight">Tanauan City, Batangas</div><div class="text-[11px] opacity-70">3D Hazard Dashboard</div></div>
     </div>
-    <div class="absolute bottom-6 left-3 bg-white/90 dark:bg-slate-800/90 backdrop-blur rounded-xl p-3 shadow text-xs space-y-1" id="legend"></div>
   </div>
 
   <aside class="md:w-[370px] md:overflow-y-auto rounded-2xl bg-white dark:bg-slate-800 shadow-lg p-4 space-y-4 text-sm">
@@ -50,23 +46,16 @@
     </section>
 
     <section>
-      <h2 class="font-bold mb-2">Facilities</h2>
-      <div id="filters" class="flex flex-wrap gap-2"></div>
-    </section>
-
-    <section>
       <h2 class="font-bold mb-1">Hazard at pin</h2>
-      <p class="text-xs opacity-70 mb-2">Click the map to query MGB susceptibility at that point.</p>
+      <p class="text-xs opacity-70 mb-2">Use your device location, or click the map to query MGB susceptibility at any point.</p>
+      <button id="locate" class="w-full mb-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-2">
+        <i data-lucide="locate-fixed" class="w-4 h-4"></i> Use my current location
+      </button>
       <div id="vecs" class="text-[11px] opacity-70 mb-2"></div>
       <div id="pinres" class="rounded-lg bg-slate-100 dark:bg-slate-700 p-3 text-xs">No point selected.</div>
     </section>
 
-    <section>
-      <h2 class="font-bold mb-1">Risk statistics (facilities)</h2>
-      <div id="stats" class="space-y-1 text-xs">Checking official MGB data…</div>
-    </section>
-
-    <p class="text-[11px] opacity-70 leading-snug">Sources: MGB flood (2018) &amp; rain-induced landslide (2012) susceptibility via Philippine Geoportal / UlaP (ulap-hazards.georisk.gov.ph). Esri imagery, AWS Terrain Tiles, OpenFreeMap buildings. Susceptibility is general, not real-time. Facility pins are approximate; confirm with the City DRRMO/MGB before decisions.</p>
+    <p class="text-[11px] opacity-70 leading-snug">Sources: MGB flood (2018) &amp; rain-induced landslide (2012) susceptibility via Philippine Geoportal / UlaP (ulap-hazards.georisk.gov.ph). Esri imagery, AWS Terrain Tiles, OpenFreeMap buildings. Susceptibility is general, not real-time. Confirm with the City DRRMO/MGB before decisions.</p>
   </aside>
 </div>
 
@@ -75,15 +64,6 @@ const CENTER=[121.1511,14.0858];
 const MGB='https://ulap-hazards.georisk.gov.ph/arcgis/rest/services/MGBPublic/';
 const SVC={flood:MGB+'Flood/MapServer',slide:MGB+'RainInducedLandslide/MapServer'};
 const exportUrl=s=>`${s}/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&layers=show:0&f=image`;
-
-const FAC=[
- {n:'Tanauan City Hall',t:'gov',c:[121.1503,14.0858],d:'Seat of city government and emergency operations coordination.'},
- {n:'C.P. Reyes Hospital',t:'health',c:[121.1535,14.0846],d:'Primary hospital for emergency and trauma care.'},
- {n:'Tanauan Institute',t:'evac',c:[121.1522,14.0869],d:'Designated evacuation center.'},
- {n:'Tanauan Public Market',t:'market',c:[121.1496,14.0867],d:'Central public market; commercial hub and relief distribution point.'}
-];
-const TYPES={gov:['Government','landmark','#2563eb'],health:['Hospital','hospital','#dc2626'],evac:['Evacuation','tent','#16a34a'],market:['Market','shopping-basket','#d97706']};
-
 
 const sat={type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19,attribution:'Esri, Maxar, Earthstar Geographics'};
 const street={type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],tileSize:256,maxzoom:19,attribution:'© OpenStreetMap, © CARTO'};
@@ -115,6 +95,14 @@ map.addControl(new maplibregl.NavigationControl({visualizePitch:true}),'top-righ
 map.addControl(new maplibregl.ScaleControl({maxWidth:100,unit:'metric'}),'bottom-right');
 map.addControl(new maplibregl.FullscreenControl(),'top-right');
 
+// Real device location (needs HTTPS or localhost)
+const geo=new maplibregl.GeolocateControl({
+ positionOptions:{enableHighAccuracy:true,maximumAge:0,timeout:15000},
+ trackUserLocation:true,showAccuracyCircle:true,showUserLocation:true,
+ fitBoundsOptions:{maxZoom:17}
+});
+map.addControl(geo,'top-right');
+
 const $=id=>document.getElementById(id);
 const vis=(ids,on)=>ids.forEach(i=>map.getLayer(i)&&map.setLayoutProperty(i,'visibility',on?'visible':'none'));
 function setTerrain(){ $('tTer').checked?map.setTerrain({source:'dem',exaggeration:+$('ex').value}):map.setTerrain(null); }
@@ -127,26 +115,6 @@ $('tTer').onchange=setTerrain;
 $('ex').oninput=e=>{$('exv').textContent=e.target.value;setTerrain();};
 $('op').oninput=e=>{['flood','slide'].forEach(l=>map.setPaintProperty(l,'raster-opacity',+e.target.value));};
 $('bm').onchange=e=>{vis(['bm-sat'],e.target.value==='sat');vis(['bm-street'],e.target.value==='street');};
-
-// Markers + filters
-const markers=[];
-FAC.forEach(f=>{
- const el=document.createElement('div');el.className='pin';el.style.background=TYPES[f.t][2];
- el.innerHTML=`<i data-lucide="${TYPES[f.t][1]}"></i>`;
- const pop=new maplibregl.Popup({offset:28}).setHTML(`<div class="font-bold">${f.n}</div><div class="text-[11px] opacity-70 mb-1">${TYPES[f.t][0]}</div><div>${f.d}</div><div id="pp-${markers.length}" class="mt-2 text-[11px]">Checking hazard…</div>`);
- const m=new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat(f.c).setPopup(pop).addTo(map);
- f.i=markers.length;markers.push({m,f});
- pop.on('open',()=>hazardAt(f.c).then(h=>{const e=$('pp-'+f.i);if(e)e.innerHTML=hazHTML(h);}));
-});
-const active=new Set(Object.keys(TYPES));
-Object.entries(TYPES).forEach(([k,[l,ic,col]])=>{
- const b=document.createElement('button');
- b.className='px-3 py-1.5 rounded-full text-white text-xs flex items-center gap-1';b.style.background=col;
- b.innerHTML=`<i data-lucide="${ic}" class="w-3 h-3"></i>${l}`;
- b.onclick=()=>{active.has(k)?active.delete(k):active.add(k);b.style.opacity=active.has(k)?1:.35;
-  markers.forEach(({m,f})=>m.getElement().style.display=active.has(f.t)?'':'none');};
- $('filters').appendChild(b);
-});
 
 // Official MGB point query
 function jsonp(url){return new Promise((res,rej)=>{const cb='cb'+Math.random().toString(36).slice(2);const el=document.createElement('script');
@@ -186,32 +154,28 @@ async function hazardAt(c){
  return out;
 }
 const hazHTML=h=>`<b>Flood:</b> ${h.flood??'<i>could not be checked</i>'}<br><b>Landslide:</b> ${h.slide??'<i>could not be checked</i>'}`;
+
+// Pin + query (shared by map click and device location)
 let pinM;
-map.on('click',async e=>{
- const c=[e.lngLat.lng,e.lngLat.lat];
+async function queryPoint(c,extra=''){
  if(!pinM)pinM=new maplibregl.Marker({color:'#ef4444'}).setLngLat(c).addTo(map);else pinM.setLngLat(c);
  $('pinres').innerHTML='Querying MGB…';
  const h=await hazardAt(c);
- $('pinres').innerHTML=hazHTML(h)+`<div class="opacity-60 mt-1">${c[1].toFixed(5)}, ${c[0].toFixed(5)}</div>`;
+ $('pinres').innerHTML=hazHTML(h)+`<div class="opacity-60 mt-1">${c[1].toFixed(5)}, ${c[0].toFixed(5)}${extra}</div>`;
+}
+map.on('click',e=>queryPoint([e.lngLat.lng,e.lngLat.lat]));
+
+// Drop the pin exactly on the device's GPS fix
+geo.on('geolocate',p=>{
+ const {longitude,latitude,accuracy}=p.coords;
+ queryPoint([longitude,latitude],` · your location (±${Math.round(accuracy)} m)`);
 });
-
-// Stats
-(async()=>{
- const rows=await Promise.all(FAC.map(async f=>({f,h:await hazardAt(f.c)})));
- const none=s=>!s||/^None/.test(s);
- const fl=rows.filter(r=>r.h.flood&&!none(r.h.flood)).length, ls=rows.filter(r=>r.h.slide&&!none(r.h.slide)).length;
- const fail=rows.some(r=>r.h.flood===null||r.h.slide===null);
- $('stats').innerHTML=`<div class="flex gap-2"><div class="flex-1 rounded-lg bg-blue-500/15 p-2"><div class="text-lg font-bold">${fl}/${FAC.length}</div>in flood-susceptible zones</div><div class="flex-1 rounded-lg bg-orange-500/15 p-2"><div class="text-lg font-bold">${ls}/${FAC.length}</div>in landslide-susceptible zones</div></div>`+
- rows.map(r=>`<div class="flex justify-between gap-2 border-b border-slate-200 dark:border-slate-700 py-1"><span>${r.f.n}</span><span class="text-right opacity-80">${r.h.flood??'?'} / ${r.h.slide??'?'}</span></div>`).join('')+
- (fail?'<div class="text-amber-600">Some MGB queries failed (service offline or blocked). Try again later.</div>':'');
-})();
-
-// Legend
-$('legend').innerHTML=`<div class="font-bold mb-1">Legend</div>
-<div class="flex items-center gap-2"><span class="w-3 h-3 rounded bg-blue-500"></span>Flood susceptibility (low→very high)</div>
-<div class="flex items-center gap-2"><span class="w-3 h-3 rounded bg-orange-500"></span>Landslide susceptibility (low→high)</div>
-<div class="flex items-center gap-2"><span class="w-3 h-3 rounded border border-dashed"></span>Vector zones colored by class</div>`+
-Object.values(TYPES).map(([l,,c])=>`<div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full" style="background:${c}"></span>${l}</div>`).join('');
+geo.on('error',err=>{
+ $('pinres').innerHTML=err.code===1
+  ?'Location permission denied. Allow location access in your browser and try again.'
+  :'Could not get your location. Make sure GPS/location is on and the page is served over HTTPS.';
+});
+$('locate').onclick=()=>geo.trigger();
 
 // Theme
 $('theme').onclick=()=>{document.documentElement.classList.toggle('dark');};
